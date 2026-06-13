@@ -16,7 +16,7 @@
 suppressMessages({library(jsonlite); library(dplyr); library(ggplot2); library(base64enc)})
 
 # ---- config -----------------------------------------------------------------
-WD        <- "/Users/eamonnsweeney/Documents/D:FIn/AI/core_me"
+if (Sys.getenv("CI") == "") setwd("/Users/eamonnsweeney/Documents/D:FIn/AI/core_me")
 if (Sys.getenv("CI") == "") setwd(WD)   # local only; in CI use the checkout dir
 THRESH    <- list(yoy_abs = 100e6, qoq_abs = 50e6, yoy_pct = 0.50)
 MAIL_TO   <- Sys.getenv("DFIN_MAIL_TO", "")        # set to enable real sending
