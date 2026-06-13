@@ -1,23 +1,46 @@
 name: Monthly trade-anomaly monitor
 
-# Runs on the 5th of each month (by then the prior month's Comext data is filed).
-# The R script auto-detects the latest available month, so the exact run day is
-# not critical. workflow_dispatch lets you trigger a test run by hand.
+# Runs at 10:01 Irish time on the 16th of each month.
 #
-# NOTE: scheduled workflows only run from the repository's DEFAULT branch (main),
-# and GitHub auto-disables a schedule after 60 days with no repo commits — the
-# monthly state commit in the last step keeps it alive.
+# GitHub Actions cron is UTC and ignores DST, so we use TWO cron entries — one
+# for Irish Summer Time (UTC+1) and one for winter/GMT (UTC+0) — and a small
+# "gate" job lets only the entry that actually lands at 10:0x Europe/Dublin run.
+# That keeps it at 10:01 Irish year-round. (Scheduled runs can be delayed a few
+# minutes under GitHub load; the gate checks the hour so a small delay is fine.)
+#
+# NOTE: scheduled workflows only run from the default branch (main), and GitHub
+# auto-disables a schedule after 60 days with no commits — the monthly state
+# commit in the last step keeps it alive.
 
 on:
   schedule:
-    - cron: "0 8 5 * *"      # 08:00 UTC, day 5 of every month
+    - cron: "1 9 16 * *"     # 09:01 UTC = 10:01 Irish during IST (summer)
+    - cron: "1 10 16 * *"    # 10:01 UTC = 10:01 Irish during GMT (winter)
   workflow_dispatch: {}       # manual run button (Actions tab)
 
 permissions:
   contents: write             # needed so the job can commit the state file back
 
 jobs:
+  # Let only the season-correct cron through (and always allow manual runs).
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - id: check
+        run: |
+          dub_hour=$(TZ=Europe/Dublin date +%H)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$dub_hour" = "10" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Dublin hour is $dub_hour, not the 10:01 Irish slot — skipping this trigger."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   run:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
