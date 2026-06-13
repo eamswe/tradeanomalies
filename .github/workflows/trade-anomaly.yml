@@ -1,0 +1,68 @@
+name: Monthly trade-anomaly monitor
+
+# Runs on the 5th of each month (by then the prior month's Comext data is filed).
+# The R script auto-detects the latest available month, so the exact run day is
+# not critical. workflow_dispatch lets you trigger a test run by hand.
+#
+# NOTE: scheduled workflows only run from the repository's DEFAULT branch (main),
+# and GitHub auto-disables a schedule after 60 days with no repo commits — the
+# monthly state commit in the last step keeps it alive.
+
+on:
+  schedule:
+    - cron: "0 8 5 * *"      # 08:00 UTC, day 5 of every month
+  workflow_dispatch: {}       # manual run button (Actions tab)
+
+permissions:
+  contents: write             # needed so the job can commit the state file back
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # ubuntu-latest ships curl, so the script's data fetch works as-is.
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true        # binary packages = fast install
+
+      - name: Install R packages
+        # Not cached on purpose: monthly runs are >7 days apart and the Actions
+        # cache evicts after 7 days, so a cache would never hit. RSPM binaries
+        # install these in well under two minutes.
+        run: Rscript -e 'install.packages(c("jsonlite","dplyr","ggplot2","base64enc"))'
+
+      - name: Generate the report (HTML + charts + CSV)
+        # DFIN_MAIL_TO is intentionally NOT set here, so the script only WRITES
+        # the files (its internal sendmail path stays off — port 25 is blocked
+        # on hosted runners anyway). Sending is done by the next step.
+        run: Rscript trade_anomaly_monthly.R
+
+      - name: Build the subject line
+        id: meta
+        run: echo "month=$(date +'%B %Y')" >> "$GITHUB_OUTPUT"
+
+      - name: Email the report
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          secure: false                 # 587 = STARTTLS
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}   # Gmail 16-char App Password
+          from: Trade Anomaly Monitor <${{ secrets.SMTP_USERNAME }}>
+          to: ${{ secrets.DFIN_MAIL_TO }}
+          subject: "Trade Anomaly Monitor — ${{ steps.meta.outputs.month }}"
+          html_body: file://trade_anomaly_email.html
+          attachments: trade_anomaly_email_chart.png,trade_anomaly_monthly.csv
+
+      - name: Persist NEW-vs-ongoing state
+        run: |
+          git config user.name  "trade-anomaly-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add trade_anomaly_state.csv trade_anomaly_monthly.csv
+          git commit -m "anomaly state ${{ steps.meta.outputs.month }}" || echo "no changes to commit"
+          git push

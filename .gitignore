@@ -1,0 +1,12 @@
+# Regenerated and emailed each run — not tracked
+trade_anomaly_email.html
+trade_anomaly_email_chart.png
+
+# Logs
+*.log
+
+# macOS
+.DS_Store
+
+# Note: trade_anomaly_state.csv and trade_anomaly_monthly.csv ARE tracked —
+# the workflow commits them back each run, so they must not be ignored.
