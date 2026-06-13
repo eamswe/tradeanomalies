@@ -33,12 +33,9 @@ jobs:
         # Not cached on purpose: monthly runs are >7 days apart and the Actions
         # cache evicts after 7 days, so a cache would never hit. RSPM binaries
         # install these in well under two minutes.
-        run: Rscript -e 'install.packages(c("jsonlite","dplyr","ggplot2","base64enc"))'
+        run: Rscript -e 'install.packages(c("jsonlite","dplyr","ggplot2"))'
 
-      - name: Generate the report (HTML + charts + CSV)
-        # DFIN_MAIL_TO is intentionally NOT set here, so the script only WRITES
-        # the files (its internal sendmail path stays off — port 25 is blocked
-        # on hosted runners anyway). Sending is done by the next step.
+      - name: Generate the report (HTML + chart PNGs + CSV)
         run: Rscript trade_anomaly_monthly.R
 
       - name: Build the subject line
@@ -46,18 +43,15 @@ jobs:
         run: echo "month=$(date +'%B %Y')" >> "$GITHUB_OUTPUT"
 
       - name: Email the report
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 587
-          secure: false                 # 587 = STARTTLS
-          username: ${{ secrets.SMTP_USERNAME }}
-          password: ${{ secrets.SMTP_PASSWORD }}   # Gmail 16-char App Password
-          from: Trade Anomaly Monitor <${{ secrets.SMTP_USERNAME }}>
-          to: ${{ secrets.DFIN_MAIL_TO }}
-          subject: "Trade Anomaly Monitor — ${{ steps.meta.outputs.month }}"
-          html_body: file://trade_anomaly_email.html
-          attachments: trade_anomaly_email_chart.png,trade_anomaly_monthly.csv
+        # send_email.py attaches the cid: charts inline (Content-ID), so the
+        # per-category mini charts render in Gmail and Outlook. python3 + the
+        # email/smtplib stdlib ship on ubuntu-latest, so no install is needed.
+        env:
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          DFIN_MAIL_TO:  ${{ secrets.DFIN_MAIL_TO }}
+          MAIL_SUBJECT:  "Trade Anomaly Monitor — ${{ steps.meta.outputs.month }}"
+        run: python3 send_email.py
 
       - name: Persist NEW-vs-ongoing state
         run: |

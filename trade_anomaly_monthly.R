@@ -13,7 +13,7 @@
 #' Source: Eurostat Comext DS-045409 (reporter IE, partner WORLD, imports).
 #' ---------------------------------------------------------------------------
 
-suppressMessages({library(jsonlite); library(dplyr); library(ggplot2); library(base64enc)})
+suppressMessages({library(jsonlite); library(dplyr); library(ggplot2)})
 
 # ---- config -----------------------------------------------------------------
 if (Sys.getenv("CI") == "") setwd("/Users/eamonnsweeney/Documents/D:FIn/AI/core_me")
@@ -116,7 +116,10 @@ cat(sprintf("Latest month: %s | window: %s | flagged: %d (new: %d)\n",
             mlabel(t), win_lbl, nrow(flagged), sum(flagged$status=="NEW")))
 
 # ---- 5. 12-month house-style chart (top 4 flagged categories) ---------------
-chart_b64 <- ""
+# Charts are written as PNG files and referenced from the HTML via cid: so the
+# emailer (send_email.py) can attach them inline as Content-ID parts. Inline
+# base64 data: URIs are stripped by Gmail/Outlook, so we do NOT use them.
+has_overview <- FALSE
 if (nrow(flagged) > 0) {
   topc <- head(flagged$code, 4)
   shortc <- function(s) { s <- sub("\\s*[\\(“].*$", "", s); s <- sub(",.*$", "", s)
@@ -145,11 +148,12 @@ if (nrow(flagged) > 0) {
          caption = SOURCE) +
     theme_dfin() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
   ggsave("trade_anomaly_email_chart.png", p, width = 7.2, height = 3.6, dpi = 150, bg = "transparent")
-  chart_b64 <- base64enc::dataURI(file = "trade_anomaly_email_chart.png", mime = "image/png")
+  has_overview <- TRUE
 }
 
 # ---- 6. build the HTML email -------------------------------------------------
-# small house-style 12-month bar chart for a single category -> base64 data URI
+# small house-style 12-month bar chart for a single category.
+# Writes mini_<code>.png and returns its cid: reference for the HTML.
 mini_bar <- function(cd) {
   dd <- data.frame(mi = (t - 11):t) |>
     left_join(raw |> filter(code == cd) |> select(mi, eur), by = "mi") |>
@@ -165,9 +169,8 @@ mini_bar <- function(cd) {
           axis.text.y = element_text(size = 6),
           panel.grid.major.x = element_blank(),
           plot.title = element_text(size = 8))
-  f <- tempfile(fileext = ".png")
-  ggsave(f, g, width = 6.4, height = 1.5, dpi = 150, bg = "transparent")
-  base64enc::dataURI(file = f, mime = "image/png")
+  ggsave(sprintf("mini_%s.png", cd), g, width = 6.4, height = 1.5, dpi = 150, bg = "transparent")
+  sprintf("cid:mini_%s", cd)
 }
 
 # top-3 partner countries for the most recent month, with % of that month's total
@@ -227,7 +230,7 @@ box <- function(r) {
 }
 boxes <- if (nrow(flagged) > 0) paste(sapply(seq_len(nrow(flagged)), function(i) box(flagged[i,])), collapse = "") else
   sprintf('<div style="background:%s;padding:18px;font:14px Arial;color:%s;">No new trade anomalies were flagged this month.</div>', BOX, DG)
-chart_html <- if (nzchar(chart_b64)) sprintf('<img src="%s" width="640" style="display:block;margin:8px 0;"/>', chart_b64) else ""
+chart_html <- if (has_overview) '<img src="cid:trade_anomaly_email_chart" width="640" style="display:block;margin:8px 0;"/>' else ""
 
 intro <- sprintf("Monitoring Irish goods imports at the 6-digit HS level. The %s window flagged <b>%d</b> categor%s (%d new) that rose by more than €100m year-on-year, more than €50m on the previous three months, and by more than 50%%.",
                  win_lbl, nrow(flagged), ifelse(nrow(flagged)==1,"y","ies"), sum(flagged$status=="NEW"))
@@ -253,18 +256,6 @@ write.csv(flagged |> transmute(hs6 = code, category = desc, status,
             yoy_pct = ifelse(is.finite(yoy_pct), round(yoy_pct*100), Inf),
             latest_month_eurm = round(latest/1e6,1)),
           "trade_anomaly_monthly.csv", row.names = FALSE)
-cat("Wrote trade_anomaly_email.html, trade_anomaly_email_chart.png, trade_anomaly_monthly.csv\n")
-
-# ---- 7. optional send (only if DFIN_MAIL_TO is set) -------------------------
-if (nzchar(MAIL_TO)) {
-  subj <- sprintf("Trade Anomaly Monitor - %s - %d flagged (%d new)",
-                  win_lbl, nrow(flagged), sum(flagged$status=="NEW"))
-  # macOS/Linux: pipe the HTML to sendmail with an HTML content-type header.
-  msg <- sprintf("To: %s\nSubject: %s\nMIME-Version: 1.0\nContent-Type: text/html; charset=UTF-8\n\n%s",
-                 MAIL_TO, subj, html)
-  tf <- tempfile(); writeLines(msg, tf)
-  status <- system2("/usr/sbin/sendmail", c("-t"), stdin = tf)
-  cat(if (status == 0) sprintf("Email sent to %s\n", MAIL_TO) else "sendmail failed; HTML saved only.\n")
-} else {
-  cat("DFIN_MAIL_TO not set - email not sent (HTML file written for review).\n")
-}
+cat(sprintf("Wrote trade_anomaly_email.html + %d chart PNG(s) + trade_anomaly_monthly.csv\n",
+            nrow(flagged) + as.integer(has_overview)))
+# Sending is handled by send_email.py, which attaches the cid: charts inline.
